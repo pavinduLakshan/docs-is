@@ -10,14 +10,19 @@ This guide explains how you can implement federated IdP-initiated SSO using {{pr
 
 The steps below implement the following example scenario.
 
+{% if product_name == "WSO2 Identity Server" %}
 - Two instances of {{product_name}} running on two different ports (e.g. 9443 and 9444), represent the internal and external IdPs respectively.
-- The first instance (internal IdP) has an application called `travelocity`.
-- A user belonging to the second instance (external IdP) should be able to access `travelocity` without creating an account in the internal IdP.
+{% else %}
+- Two connections configured in two different Asgardeo organizations (e.g. orgA and orgB), represent the internal and external IdPs respectively.
+{% endif %}
+- The internal IdP has an application called `travelocity`.
+- A user belonging to the external IdP should be able to access `travelocity` without creating an account in the internal IdP.
 
 ## Prerequisites
 
 Before you begin, be sure to set up the following:
 
+{% if product_name == "WSO2 Identity Server" %}
 1. Set up two instances of {{product_name}}.
 
 2. Set a port offset for the external IdP so that it runs on port 9444.
@@ -29,13 +34,16 @@ Before you begin, be sure to set up the following:
 3. Since there can be cookie issues when the same hostname is configured for both {{product_name}} instances, it is recommended that you configure different hostnames for the servers.
 
     !!! info
-        Learn how to [change the hostname]({{base_path}}/deploy/change-the-hostname) for a {{product_name}} instance. In this guide, the hostname of the external IdP is changed to `localhost.com`.
+        Learn how to [change the hostname]({{base_path}}/deploy/change-the-hostname) for a WSO2 Identity Server instance. In this guide, the hostname of the external IdP is changed to `localhost.com`.
+{% else %}
+1. Set up two {{product_name}} organizations.
+{% endif %}
 
 ## Create the application
 
 The `travelocity.com` application should reside in the internal IdP. Follow the steps below in the internal IdP to register it as an application.
 
-1. On the {{product_name}} (which is running on 9443 port) Console, go to **Applications**.
+1. On {{product_name}} Console for the internal IdP, go to **Applications**.
 
 2. Click on **New Application** and select **Standard-Based Application**.
 
@@ -91,7 +99,7 @@ The `travelocity.com` application should reside in the internal IdP. Follow the 
 
 ## Configure the identity providers
 
-When performing federated IdP-initiated SSO, the two {{product_name}} instances exhibit different behaviors as explained below.
+When performing federated IdP-initiated SSO, the two identity providers (internal IdP and external IdP) exhibit different behaviors as explained below.
 
 - The `external IdP` performs the actual user authentication since the user's account resides in it. Therefore, the external IdP acts as the identity provider and sends the SAML assertion of the authenticated user to the internal IdP.
 
@@ -101,11 +109,11 @@ To establish this connection, we need to register the `external IdP` as an ident
 
 ### Register the external IdP as a connector
 
-The external IdP needs to be registered as a connector in the internal IdP. This enables the external IdP to act as an identity provider and be used as a login option for the `travelocity.com` application.
+The external IdP needs to be registered as a connector in the internal IdP. This enables the external IdP to act as a connection and be used as a login option for the `travelocity.com` application.
 
 To do so, follow the steps below in the internal IdP.
 
-1. On the {{product_name}} (which is running on 9443 port) Console, go to **Connections**.
+1. On {{product_name}} Console, go to **Connections**.
 
 2. Click **New Connection** > **Standard-Based IdP**
 
