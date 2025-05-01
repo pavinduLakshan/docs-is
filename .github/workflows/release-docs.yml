@@ -1,0 +1,184 @@
+name: Docs Release
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to tag (e.g., 0.0.1). Leave empty to use CURRENT_VERSION from environment.'
+        required: false  # This input is optional
+        default: ''
+
+env:  # Global environment variables
+  GIT_USERNAME: ${{ secrets.GIT_USERNAME }}
+  GIT_USER_EMAIL: ${{ secrets.GIT_USER_EMAIL }}
+  GITHUB_TOKEN: ${{ secrets.IAM_DOCS_GITHUB_BOT_TOKEN }}
+  GIT_ORG_NAME: ${{ secrets.GIT_ORG_NAME }}
+  GIT_REPO_NAME: ${{ secrets.GIT_REPO_NAME }}
+  GIT_BRANCH_NAME: ${{ secrets.GIT_BRANCH_NAME }}
+  IS_HOTFIX: 'false'
+
+jobs:
+  release-asgardeo-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.IAM_DOCS_GITHUB_BOT_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r en/asgardeo/requirements.txt
+
+      - name: Get the current version
+        run: |
+          echo "CURRENT_VERSION=$(git describe --tags --abbrev=0)" >> $GITHUB_ENV
+
+      - name: Increment version
+        run: |
+          NEW_VERSION="${{ github.event.inputs.version }}"
+          
+          if [[ -z "$NEW_VERSION" ]]; then
+            set -euxo pipefail
+            IFS='.' read -r MAJOR MINOR PATCH <<< "${{ env.CURRENT_VERSION }}"
+            echo "Current version: MAJOR=$MAJOR, MINOR=$MINOR, PATCH=$PATCH"
+            PATCH=$((PATCH+1))
+            NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+            echo "Version is auto incremented."
+          fi
+
+          echo "New version: $NEW_VERSION"
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Prepare hotfix
+        if: ${{ env.IS_HOTFIX == 'true' }}
+        run: |
+          set +e
+          
+          # Determine the hotfix tag
+          # echo "Determining the hotfix tag..."
+
+          hotfix_count=$(git tag | grep -E "${{ env.NEW_VERSION }}-hotfix-[0-9]+" | wc -l)
+          echo "Hotfix count: $hotfix_count"
+
+          next_hotfix_no=$((hotfix_count + 1))
+          echo "Next Hotfix number: $next_hotfix_no"
+
+          # Replace the last digit with the incremented value
+          hotfix_release_tag=${{ env.NEW_VERSION }}-hotfix-$next_hotfix_no
+          echo "Hotfix release tag: $hotfix_release_tag"
+
+          # strip prepending 'v'
+          NEW_VERSION=$(echo $hotfix_release_tag | sed 's/^v//')
+          
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+
+        shell: bash
+
+      - name: Build MkDocs Documentation
+        run: |
+          unset ENABLE_HOOKS
+          cd en/asgardeo
+          mkdocs build
+          cd ../../
+
+      - name: Conditionally build MkDocs Documentation 
+        run: |
+          export ENABLE_HOOKS=true 
+          cd en/asgardeo
+          mkdocs build --site-dir prod-build
+          cd ../../
+
+      - name: Zip the Documentation
+        run: |
+          mkdir -p out/asgardeo/docs
+          mkdir -p out-prod/asgardeo/docs
+          cp -r ./en/asgardeo/site/* out/asgardeo/docs/
+          cp -r ./en/asgardeo/prod-build/* out-prod/asgardeo/docs/
+          zip -r asgardeo-docs-${{ env.NEW_VERSION }}.zip ./out
+          zip -r asgardeo-docs-${{ env.NEW_VERSION }}-prod.zip ./out-prod
+
+      - name: Create git tag
+        run: |
+          git config user.name $GIT_USERNAME
+          git config user.email $GIT_USER_EMAIL
+          git tag "${{ env.NEW_VERSION }}"
+          git tag "${{ env.NEW_VERSION }}-prod"
+          git push "https://$GIT_USERNAME:$GITHUB_TOKEN@github.com/${{ github.repository }}" "${{ env.NEW_VERSION }}"
+          git push "https://$GIT_USERNAME:$GITHUB_TOKEN@github.com/${{ github.repository }}" "${{ env.NEW_VERSION }}-prod"
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        with:
+          tag_name: ${{ env.NEW_VERSION }}
+          release_name: Asgardeo Docs - ${{ env.NEW_VERSION }}
+          draft: false
+          prerelease: ${{ env.IS_HOTFIX == 'true' }}
+      
+      - name: Create prod release
+        id: create_prod_release
+        uses: actions/create-release@v1
+        with:
+          tag_name: ${{ env.NEW_VERSION }}-prod
+          release_name: Asgardeo Docs - ${{ env.NEW_VERSION }}-prod
+          draft: false
+          prerelease: ${{ env.IS_HOTFIX == 'true' }}
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./asgardeo-docs-${{ env.NEW_VERSION }}.zip
+          asset_name: asgardeo-docs-${{ env.NEW_VERSION }}.zip
+          asset_content_type: application/zip
+      
+      - name: Upload Prod Release Asset
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_prod_release.outputs.upload_url }}
+          asset_path: ./asgardeo-docs-${{ env.NEW_VERSION }}-prod.zip
+          asset_name: asgardeo-docs-${{ env.NEW_VERSION }}-prod.zip
+          asset_content_type: application/zip
+
+      - name: Update Downstream Repository Version
+        if: ${{ env.IS_HOTFIX == 'false' }}
+        run: |
+          set -euxo pipefail
+          VERSION_FILE_PATH="$GITHUB_WORKSPACE/$GIT_REPO_NAME/cd-pipelines/docs/dev-setup-variables.yaml"
+          VERSION_LINE_PREFIX='GITHUB_RELEASE_TAG: v' # Line prefix to identify the version line
+
+          # Clone the downstream repository
+          git clone "https://$GIT_USERNAME:$GITHUB_TOKEN@github.com/$GIT_ORG_NAME/$GIT_REPO_NAME.git"
+          cd $GIT_REPO_NAME
+          git checkout $GIT_BRANCH_NAME
+
+          # Extracting the current version line from the YAML file
+          CURRENT_VERSION_LINE=$(grep "$VERSION_LINE_PREFIX" "$VERSION_FILE_PATH")
+
+          # Replacing the current version line with the new version line
+          sed -i 's|'"${CURRENT_VERSION_LINE}"'|  GITHUB_RELEASE_TAG: '"${{ env.NEW_VERSION }}"'|' "$VERSION_FILE_PATH"
+
+          # Verifying if the file has changed, and if so, committing and pushing it
+          if git status --porcelain; then
+            git config user.name $GIT_USERNAME
+            git config user.email $GIT_USER_EMAIL
+            git add "$VERSION_FILE_PATH"
+            git commit -m "[Dev] Update asgardeo-docs release version to ${{ env.NEW_VERSION }}"
+            git push origin $GIT_BRANCH_NAME
+
+          echo "Updated the downstream repository version to ${{ env.NEW_VERSION }}"
+          else
+            echo "No changes to the downstream repository version"
+          fi
